@@ -1,0 +1,88 @@
+diff --git a/Task/Inc/CtrlTask.h b/Task/Inc/CtrlTask.h
+index 4379d68..f553978 100644
+--- a/Task/Inc/CtrlTask.h
++++ b/Task/Inc/CtrlTask.h
+@@ -39,6 +39,7 @@ void CtrlTask(void);
+ void Hoolle_Output(Motor_Hoolle *Motor, uint16_t num);
+ void Card_Output(Motor_Card *Switch, uint16_t num);
+ void Valve_Start(Switch_Valve *Valve, uint8_t TriggerCount);
++void MiniGameBall_EjectIfOccupied(void);
+ void Device_Stop(void);
+ 
+ #endif
+diff --git a/Task/Src/CommTask.c b/Task/Src/CommTask.c
+index db435fc..40cba5e 100644
+--- a/Task/Src/CommTask.c
++++ b/Task/Src/CommTask.c
+@@ -120,6 +120,8 @@ static void USART1_Deal(void *Rx_mesg)
+         {
+             Hoolle_Output(&Motor_Hoolle1, 0);
+             Card_Output(&Card, 0);
++            // Clear a ball still held in either mini-game hole.
++            MiniGameBall_EjectIfOccupied();
+         }
+         break;
+     case 0x0A: // 保存设置
+diff --git a/Task/Src/CtrlTask.c b/Task/Src/CtrlTask.c
+index e0b4101..5211c4d 100644
+--- a/Task/Src/CtrlTask.c
++++ b/Task/Src/CtrlTask.c
+@@ -280,6 +280,28 @@ void Valve_Start(Switch_Valve *Valve, uint8_t TriggerCount)
+     Valve->TriggerCount = TriggerCount;
+ }
+ 
++/*
++ * @brief Eject a ball that is still occupying either mini-game hole.
++ * @note  Hole sensors are active high. Start only when both valves are idle.
++ */
++void MiniGameBall_EjectIfOccupied(void)
++{
++    bool left_occupied = (HAL_GPIO_ReadPin(Hole_Left_GPIO_Port, Hole_Left_Pin) == GPIO_PIN_SET);
++    bool right_occupied = (HAL_GPIO_ReadPin(Hole_Right_GPIO_Port, Hole_Right_Pin) == GPIO_PIN_SET);
++
++    if (left_occupied == false && right_occupied == false)
++        return;
++
++    if (Left_Valve.TriggerCount == 0 &&
++        Right_Valve.TriggerCount == 0 &&
++        Left_Valve.Switch.state == DEVICE_STATE_IDLE &&
++        Right_Valve.Switch.state == DEVICE_STATE_IDLE)
++    {
++        Valve_Start(&Left_Valve, Valve_TriggerCount);
++        Valve_Start(&Right_Valve, Valve_TriggerCount);
++    }
++}
++
+ void Device_Stop(void)
+ {
+     Motor_Hoolle1.Motor.state = DEVICE_STATE_STOP;
+diff --git a/Task/Src/KeyTask.c b/Task/Src/KeyTask.c
+index d86b581..017285f 100644
+--- a/Task/Src/KeyTask.c
++++ b/Task/Src/KeyTask.c
+@@ -151,11 +151,7 @@ static void Hole_LongCallback(uint16_t id)
+             CommTransmitFillData(&Tx1, 0x14, 0x01, 0x00);
+             if (Scene != SCENE_ADDITIONAL && Scene != SCENE_PLAYING && Scene != SCENE_HAPPY1 && Scene != SCENE_HAPPY2 && Scene != SCENE_SETTING)
+             {
+-                if (Left_Valve.TriggerCount == 0 && Right_Valve.TriggerCount == 0 && Left_Valve.Switch.state == DEVICE_STATE_IDLE)
+-                {
+-                    Valve_Start(&Left_Valve, Valve_TriggerCount);
+-                    Valve_Start(&Right_Valve, Valve_TriggerCount);
+-                }
++                MiniGameBall_EjectIfOccupied();
+             }
+             EventGroupSetBits(&Event, Event_LeftHoleInside);
+         }
+@@ -167,11 +163,7 @@ static void Hole_LongCallback(uint16_t id)
+             CommTransmitFillData(&Tx1, 0x14, 0x01, 0x01);
+             if (Scene != SCENE_ADDITIONAL && Scene != SCENE_PLAYING && Scene != SCENE_HAPPY1 && Scene != SCENE_HAPPY2 && Scene != SCENE_SETTING)
+             {
+-                if (Left_Valve.TriggerCount == 0 && Right_Valve.TriggerCount == 0 && Right_Valve.Switch.state == DEVICE_STATE_IDLE)
+-                {
+-                    Valve_Start(&Left_Valve, Valve_TriggerCount);
+-                    Valve_Start(&Right_Valve, Valve_TriggerCount);
+-                }
++                MiniGameBall_EjectIfOccupied();
+             }
+             EventGroupSetBits(&Event, Event_RightHoleInside);
+         }
