@@ -89,6 +89,9 @@ virtualFolder:
         - path: ../Task/Src/LightTask.c
         - path: ../Task/Src/MainTask.c
         - path: ../Task/Src/MesgTask.c
+        - path: ../Task/Src/OtaEntry.c
+        - path: ../Task/Src/OtaEntryControl.c
+        - path: ../Task/Src/OtaRequest.c
       folders: []
     - name: ::CMSIS
       files: []
