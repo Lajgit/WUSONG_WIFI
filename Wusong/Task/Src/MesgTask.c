@@ -1,6 +1,7 @@
 #include "MainTask.h"
 #include "MesgTask.h"
 #include "CommTask.h"
+#include "AppVersion.h"
 #include "CtrlTask.h"
 #include "port_communicate.h"
 #include "port_event.h"
@@ -32,6 +33,13 @@ void Mesg_Task(void)
         CommTransmitFillData(&Tx1, 0x19, 0x03, 0x01);                // 向安卓发送已开锁
         Valve_Start(&Lock_Valve,1);
         EventGroupClearBits(&Mesg_event, MesgEvent_Unlock);
+    }
+    // APP版本号
+    if (EventGroupCheckBits(&Mesg_event, MesgEvent_VersionRequest) == true)
+    {
+        CommTransmitFillData(&Tx1, 0x21, APP_VERSION_MAJOR, APP_VERSION_MINOR);
+        CommTransmitFillData(&Tx1, 0x22, APP_VERSION_PATCH, APP_VERSION_RESERVED);
+        EventGroupClearBits(&Mesg_event, MesgEvent_VersionRequest);
     }
     // 投珠
     if (EventGroupCheckBits(&Mesg_event, MesgEvent_HoolleInput) == true)
