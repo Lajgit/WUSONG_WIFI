@@ -1,22 +1,23 @@
 #include "OtaEntry.h"
 #include "MainTask.h"
 #include "usart.h"
-
-#define OTA_ENTRY_FRAME_LENGTH 7U
-
-static const uint8_t OTA_EntryFrame[OTA_ENTRY_FRAME_LENGTH] =
-{
-    0xF0, 0x42, 0x4F, 0x54, 0x41, 0x01, 0x00
-};
+#include "app_crc.h"
 
 void OTA_EnterBootloader(void)
 {
+    uint8_t response[7] = {0xAA, 0xF0, 0x42, 0x4F, 0x00, 0x00, 0x55};
+    uint16_t crc16;
+
     if (OTA_SetBootRequest() == false)
         return;
 
+    crc16 = CRC16_calculate(response, 4);
+    response[4] = (uint8_t)(crc16 >> 8);
+    response[5] = (uint8_t)crc16;
+
     HAL_UART_Transmit(&huart1,
-                      (uint8_t *)OTA_EntryFrame,
-                      OTA_ENTRY_FRAME_LENGTH,
+                      response,
+                      sizeof(response),
                       100U);
 
     HAL_Delay(100U);
