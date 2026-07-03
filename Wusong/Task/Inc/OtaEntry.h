@@ -3,6 +3,7 @@
 
 #include "stdint.h"
 
+void OTA_EnterBootloader(void);
 void OTA_EntryReceive(void *self, void *mesg, uint8_t mesg_len);
 
 #endif
