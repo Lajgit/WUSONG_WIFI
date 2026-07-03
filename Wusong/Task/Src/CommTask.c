@@ -225,6 +225,10 @@ static void USART1_Deal(void *Rx_mesg)
     case 0x0F: // 开锁
         EventGroupSetBits(&Mesg_event, MesgEvent_Unlock);
         break;
+    case 0x12: // 获取APP版本号
+        if (mesg->Data1 == 0x00 && mesg->Data2 == 0x01)
+            EventGroupSetBits(&Mesg_event, MesgEvent_VersionRequest);
+        break;
     case 0xF0: // 进入Bootloader升级模式
         if (mesg->Data1 == 0x42 && mesg->Data2 == 0x4F)
             OTA_EnterBootloader();
