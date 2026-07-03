@@ -155,13 +155,50 @@ finish:
     return result;
 }
 
+/*
+ * 切换MSP后不能再执行可能访问当前C函数栈帧的代码。
+ * 使用无栈汇编直接装载APP栈顶并跳转到Reset_Handler。
+ * 跳转时保持全局中断关闭，APP在main()入口重新开启中断。
+ */
+#if defined(__CC_ARM)
+__asm static void Boot_JumpAssembly(uint32_t app_stack, uint32_t app_reset)
+{
+    MSR MSP, R0
+    MOVS R0, #0
+    MSR CONTROL, R0
+    ISB
+    BX R1
+}
+#elif defined(__ARMCC_VERSION) && (__ARMCC_VERSION >= 6010050)
+__attribute__((naked, noreturn)) static void Boot_JumpAssembly(uint32_t app_stack,
+                                                                uint32_t app_reset)
+{
+    __asm volatile(
+        "msr msp, r0\n"
+        "movs r0, #0\n"
+        "msr control, r0\n"
+        "isb\n"
+        "bx r1\n");
+}
+#elif defined(__GNUC__)
+__attribute__((naked, noreturn)) static void Boot_JumpAssembly(uint32_t app_stack,
+                                                                uint32_t app_reset)
+{
+    __asm volatile(
+        "msr msp, r0\n"
+        "movs r0, #0\n"
+        "msr control, r0\n"
+        "isb\n"
+        "bx r1\n");
+}
+#else
+#error Unsupported compiler for Boot_JumpAssembly
+#endif
+
 void JumpToApplication(void)
 {
-    typedef void (*AppEntry_t)(void);
-
     uint32_t app_stack;
     uint32_t app_reset;
-    AppEntry_t entry;
     uint32_t i;
 
     if (!Boot_AppIsValid())
@@ -169,7 +206,6 @@ void JumpToApplication(void)
 
     app_stack = *(volatile uint32_t *)APP_ADDR;
     app_reset = *(volatile uint32_t *)(APP_ADDR + 4U);
-    entry = (AppEntry_t)app_reset;
 
     __disable_irq();
 
@@ -179,6 +215,7 @@ void JumpToApplication(void)
     SysTick->CTRL = 0U;
     SysTick->LOAD = 0U;
     SysTick->VAL = 0U;
+    SCB->ICSR = SCB_ICSR_PENDSTCLR_Msk | SCB_ICSR_PENDSVCLR_Msk;
 
     for (i = 0U; i < 8U; i++)
     {
@@ -187,13 +224,13 @@ void JumpToApplication(void)
     }
 
     SCB->VTOR = APP_ADDR;
-    __set_CONTROL(0U);
-    __set_MSP(app_stack);
+    __set_BASEPRI(0U);
+    __set_FAULTMASK(0U);
+    __set_PSP(0U);
     __DSB();
     __ISB();
-    __enable_irq();
 
-    entry();
+    Boot_JumpAssembly(app_stack, app_reset);
 
     while (1)
     {
