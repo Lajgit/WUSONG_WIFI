@@ -4,6 +4,7 @@
 #include "CtrlTask.h"
 #include "FlashTask.h"
 #include "LightTask.h"
+#include "OtaEntry.h"
 #include "port_communicate.h"
 #include "usart.h"
 #include "app_crc.h"
@@ -268,7 +269,7 @@ void CommInit(void)
     Rxinit.RingBuf_Size = sizeof(rx1_buffer);
     Rxinit.Frame_Head = Mesg_Head;
     Rxinit.Frame_Tail = Mesg_Tail;
-    Rxinit.Receive = NULL;
+    Rxinit.Receive = OTA_EntryReceive;
     Rxinit.Verify = USART1_ReceiveMesg_Verify;
     Rxinit.Deal = USART1_Deal;
 
@@ -277,6 +278,7 @@ void CommInit(void)
     Rxinit.huart = &huart3;
     Rxinit.RingBuf = rx3_buffer;
     Rxinit.RingBuf_Size = sizeof(rx3_buffer);
+    Rxinit.Receive = NULL;
     Rxinit.Verify = USART3_ReceiveMesg_Verify;
     Rxinit.Deal = USART3_Deal;
     Communicate_Rx_Init(&Rx3, Rxinit);
