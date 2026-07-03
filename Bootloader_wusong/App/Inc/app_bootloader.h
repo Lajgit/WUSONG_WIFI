@@ -46,8 +46,10 @@ HAL_StatusTypeDef Flash_Program(uint32_t StartAddress, uint8_t *Data, uint32_t S
 HAL_StatusTypeDef Boot_FlashWrite(uint32_t start_address,
                                   const uint8_t *data,
                                   uint32_t size);
+HAL_StatusTypeDef Boot_EraseApplication(uint32_t image_size);
 HAL_StatusTypeDef Boot_EraseCache(void);
 bool Boot_FlashCompare(uint32_t address, const uint8_t *data, uint32_t size);
+bool Boot_VectorIsValid(uint32_t stack_pointer, uint32_t reset_handler);
 bool Boot_AppIsValid(void);
 bool Boot_CachedImageVectorIsValid(uint32_t image_size);
 bool Boot_ReadMetadata(OtaMetadata_t *metadata);
