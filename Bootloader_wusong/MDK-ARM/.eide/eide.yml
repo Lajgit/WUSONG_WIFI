@@ -79,6 +79,12 @@ virtualFolder:
         - path: ../App/Src/app_sd.c
         - path: ../App/Src/fatfs_sd.c
         - path: ../App/Src/app_sm16306s.c
+        - path: ../App/Src/app_boot_erase.c
+        - path: ../App/Src/app_boot_flash.c
+        - path: ../App/Src/app_boot_install.c
+        - path: ../App/Src/app_boot_metadata.c
+        - path: ../App/Src/app_crc32.c
+        - path: ../App/Src/app_ota.c
       folders: []
     - name: ::CMSIS
       files: []
@@ -235,4 +241,4 @@ targets:
         resetMode: default
         runAfterProgram: true
         speed: 4000
-    uploader: STLink
+    uploader: OpenOCD
