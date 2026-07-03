@@ -225,6 +225,10 @@ static void USART1_Deal(void *Rx_mesg)
     case 0x0F: // 开锁
         EventGroupSetBits(&Mesg_event, MesgEvent_Unlock);
         break;
+    case 0xF0: // 进入Bootloader升级模式
+        if (mesg->Data1 == 0x42 && mesg->Data2 == 0x4F)
+            OTA_EnterBootloader();
+        break;
     case 0xFF: // 停止所有输出
         Device_Stop();
         EventGroupSetBits(&Mesg_event, MesgEvent_CardOutputFinish); // 吐卡完成
@@ -269,7 +273,7 @@ void CommInit(void)
     Rxinit.RingBuf_Size = sizeof(rx1_buffer);
     Rxinit.Frame_Head = Mesg_Head;
     Rxinit.Frame_Tail = Mesg_Tail;
-    Rxinit.Receive = OTA_EntryReceive;
+    Rxinit.Receive = NULL;
     Rxinit.Verify = USART1_ReceiveMesg_Verify;
     Rxinit.Deal = USART1_Deal;
 
