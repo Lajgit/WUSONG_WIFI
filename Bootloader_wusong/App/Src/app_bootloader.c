@@ -1,157 +1,242 @@
 #include "app_bootloader.h"
-#include "app_sm16306s.h"
+#include "app_ota.h"
+#include "usart.h"
+#include <string.h>
 
 extern FATFS fs;
-extern FIL fil;
 extern uint8_t r_buffer[1024];
-extern uint8_t sm16306s_data[2];
+extern UART_HandleTypeDef huart1;
 
-// Flash编程函数
-HAL_StatusTypeDef Flash_Program(uint32_t StartAddress, uint8_t *Data, uint32_t Size)
+typedef enum
 {
-    uint32_t *pData = (uint32_t *)Data;
-    uint32_t address = StartAddress;
-    uint32_t words = (Size + 3) / 4; // 字节转字(向上取整)
+    SD_UPGRADE_NOT_FOUND = 0,
+    SD_UPGRADE_SUCCESS,
+    SD_UPGRADE_FAILED,
+} SdUpgradeResult_t;
 
-    for (uint32_t i = 0; i < words; i++)
+static bool Boot_ConsumeOtaRequest(void)
+{
+    uint32_t magic;
+    uint32_t timeout;
+    uint32_t retry;
+    bool ota_requested;
+
+    __HAL_RCC_PWR_CLK_ENABLE();
+    __DSB();
+    (void)RCC->APB1ENR;
+
+    HAL_PWR_EnableBkUpAccess();
+
+    timeout = 100000U;
+    while (((PWR->CR & PWR_CR_DBP) == 0U) && (timeout > 0U))
+        timeout--;
+
+    if (timeout == 0U)
     {
-        if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, address, *pData) != HAL_OK)
-        {
-            return HAL_ERROR;
-        }
-        address += 4;
-        pData++;
+        HAL_PWR_DisableBkUpAccess();
+        return false;
     }
-    return HAL_OK;
+
+    __HAL_RCC_RTC_ENABLE();
+    __DSB();
+    (void)RCC->BDCR;
+
+    magic = RTC->BKP0R;
+    ota_requested = (magic == OTA_REQUEST_MAGIC);
+
+    for (retry = 0U; retry < 3U; retry++)
+    {
+        RTC->BKP0R = 0U;
+        __DSB();
+        __ISB();
+
+        if (RTC->BKP0R == 0U)
+            break;
+    }
+
+    HAL_PWR_DisableBkUpAccess();
+
+    return ota_requested;
 }
 
-// 跳转到应用程序
+static SdUpgradeResult_t Boot_InstallFromSd(void)
+{
+    FIL firmware_file;
+    UINT bytes_read;
+    uint32_t file_size;
+    uint32_t offset = 0U;
+    uint32_t stack_pointer;
+    uint32_t reset_handler;
+    SdUpgradeResult_t result = SD_UPGRADE_FAILED;
+
+    if (mount_disk(&fs, "", 0) != FR_OK)
+    {
+        f_mount(NULL, "", 0);
+        return SD_UPGRADE_NOT_FOUND;
+    }
+
+    if (f_open(&firmware_file, FileName_Bin, FA_READ) != FR_OK)
+    {
+        f_mount(NULL, "", 0);
+        return SD_UPGRADE_NOT_FOUND;
+    }
+
+    file_size = f_size(&firmware_file);
+
+    if (file_size < 8U || file_size > APP_MAX_SIZE)
+        goto finish;
+
+    if (f_read(&firmware_file, r_buffer, 8U, &bytes_read) != FR_OK ||
+        bytes_read != 8U)
+    {
+        goto finish;
+    }
+
+    memcpy(&stack_pointer, &r_buffer[0], sizeof(stack_pointer));
+    memcpy(&reset_handler, &r_buffer[4], sizeof(reset_handler));
+
+    if (!Boot_VectorIsValid(stack_pointer, reset_handler))
+        goto finish;
+
+    if (f_lseek(&firmware_file, 0U) != FR_OK)
+        goto finish;
+
+    if (Boot_EraseApplication(file_size) != HAL_OK)
+        goto finish;
+
+    while (offset < file_size)
+    {
+        uint32_t remain = file_size - offset;
+        UINT read_size = remain > sizeof(r_buffer) ?
+                         sizeof(r_buffer) : (UINT)remain;
+
+        if (read_file(&firmware_file,
+                      r_buffer,
+                      read_size,
+                      &bytes_read) != FR_OK ||
+            bytes_read == 0U)
+        {
+            goto finish;
+        }
+
+        if (Boot_FlashWrite(APP_ADDR + offset,
+                            r_buffer,
+                            bytes_read) != HAL_OK ||
+            !Boot_FlashCompare(APP_ADDR + offset,
+                               r_buffer,
+                               bytes_read))
+        {
+            goto finish;
+        }
+
+        offset += bytes_read;
+    }
+
+    if (offset == file_size && Boot_AppIsValid())
+        result = SD_UPGRADE_SUCCESS;
+
+finish:
+    close_file(&firmware_file);
+    f_mount(NULL, "", 0);
+
+    if (result == SD_UPGRADE_SUCCESS)
+    {
+        uint8_t i;
+
+        for (i = 0U; i < 6U; i++)
+        {
+            HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
+            HAL_Delay(100U);
+        }
+
+        HAL_Delay(500U);
+    }
+
+    return result;
+}
+
 void JumpToApplication(void)
 {
-    typedef void (*pFunction)(void);
-    pFunction Jump_To_App;
+    typedef void (*AppEntry_t)(void);
 
-    // 检查应用程序栈指针
-    // if (((*(__IO uint32_t *)APP_ADDR) & 0x2FFE0000) == 0x20000000)
-    //{
+    uint32_t app_stack;
+    uint32_t app_reset;
+    AppEntry_t entry;
+    uint32_t i;
 
-    // 初始化应用程序栈指针
-    __set_MSP(*(__IO uint32_t *)APP_ADDR);
+    if (!Boot_AppIsValid())
+        return;
 
-    // 获取应用程序入口点
-    Jump_To_App = (pFunction)(*(__IO uint32_t *)(APP_ADDR + 4));
+    app_stack = *(volatile uint32_t *)APP_ADDR;
+    app_reset = *(volatile uint32_t *)(APP_ADDR + 4U);
+    entry = (AppEntry_t)app_reset;
 
     __disable_irq();
 
-    // 设置向量表位置
+    HAL_UART_DeInit(&huart1);
+    HAL_DeInit();
+
+    SysTick->CTRL = 0U;
+    SysTick->LOAD = 0U;
+    SysTick->VAL = 0U;
+
+    for (i = 0U; i < 8U; i++)
+    {
+        NVIC->ICER[i] = 0xFFFFFFFFU;
+        NVIC->ICPR[i] = 0xFFFFFFFFU;
+    }
+
     SCB->VTOR = APP_ADDR;
-// 跳转到应用程序
-#if DEBUG_PRINT
-    printf("Jumping to app_address\r\n");
-#endif
-    Jump_To_App();
-    //}
+    __set_CONTROL(0U);
+    __set_MSP(app_stack);
+    __DSB();
+    __ISB();
+    __enable_irq();
+
+    entry();
+
+    while (1)
+    {
+    }
 }
 
 void App_Bootloader(void)
 {
-    // 挂载文件系统
-    if (mount_disk(&fs, "", 0) != FR_OK)
+    OtaMetadata_t metadata;
+    SdUpgradeResult_t sd_result;
+    bool ota_requested;
+    bool recovery_pending = false;
+
+    ota_requested = Boot_ConsumeOtaRequest();
+
+    if (ota_requested)
+        OTA_Run();
+
+    if (Boot_ReadMetadata(&metadata) &&
+        (metadata.state == OTA_META_VALID ||
+         metadata.state == OTA_META_INSTALLING ||
+         (metadata.state == OTA_META_INSTALLED &&
+          !Boot_AppIsValid())))
     {
-        // 挂载失败处理
-        // Error_Handler();
-        f_mount(NULL, "", 0);
-        JumpToApplication();
-    }
-    HAL_StatusTypeDef ProgramStatus;
-    FIL firmwareFile;
-    UINT bytesRead;
-    uint32_t fileSize, sectorError;
+        recovery_pending = true;
 
-    // 打开固件文件
-    if (f_open(&firmwareFile, FileName_Bin, FA_READ) == FR_OK)
+        if (Boot_InstallCachedImage() == HAL_OK)
+        {
+            HAL_Delay(100U);
+            JumpToApplication();
+        }
+    }
+
+    if (!recovery_pending)
     {
-        fileSize = f_size(&firmwareFile);
-        uint8_t *buffer = malloc(1024);
-        // 配置flash擦除结构体
-        FLASH_EraseInitTypeDef erase = {0};
-        erase.TypeErase = FLASH_TYPEERASE_SECTORS;
-        erase.Sector = FLASH_SECTOR_1; // 从扇区1（0x08004000）开始擦除
-        erase.NbSectors = 9;           // 擦除9个扇区
-        erase.VoltageRange = FLASH_VOLTAGE_RANGE_3;
-        // 解锁Flash
-        if (HAL_FLASH_Unlock() == HAL_OK)
-        {
-            // 擦除应用程序区域
-            if (HAL_FLASHEx_Erase(&erase, &sectorError) != HAL_OK)
-            {
-#if DEBUG_PRINT
-                printf("Flash erase error!\r\n");
-#endif
-                return;
-            }
-        }
-        else
-        {
-#if DEBUG_PRINT
-            printf("flash unlock error");
-#endif
-            return;
-        }
+        sd_result = Boot_InstallFromSd();
 
-        uint32_t offset = 0;
-        while (offset < fileSize)
-        {
-            // 从SD卡读取数据
-            read_file(&firmwareFile, buffer, 1024, &bytesRead);
-
-            // 编程Flash
-            ProgramStatus = Flash_Program(APP_ADDR + offset, buffer, bytesRead);
-#if DEBUG_PRINT
-            if (ProgramStatus != HAL_OK)
-            {
-                printf("Flash programming error\r\n"); // 编程错误处理
-                break;
-            }
-            else
-            {
-                printf("Programmed %d bytes\r\n", bytesRead);
-            }
-#endif
-
-            offset += bytesRead;
-        }
-        if (offset >= fileSize) // 写入成功
-        {
-#if DEBUG_PRINT
-            printf("Program success!\r\n");
-#endif
-            sm16306s_data[0] = 0xFF;
-            sm16306s_data[1] = 0xFF;
-            SM16306S_SetLight(sm16306s_data);
-            for (uint8_t i = 0; i < 6; i++)
-            {
-                HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
-                HAL_Delay(100);
-            }
-            HAL_Delay(500);
-        }
-
-        // 关闭文件
-        close_file(&firmwareFile);
-        free(buffer);     // 释放空间
-        HAL_FLASH_Lock(); // 锁定flash
-
-        // 卸载文件系统
-        f_mount(NULL, "", 0);
-
-        // 跳转到应用程序
-        JumpToApplication();
+        if (sd_result == SD_UPGRADE_SUCCESS)
+            JumpToApplication();
     }
-    else
-    {
-        HAL_FLASH_Lock();
-        f_mount(NULL, "", 0);
+
+    if (Boot_AppIsValid())
         JumpToApplication();
-    }
+
+    OTA_Run();
 }
